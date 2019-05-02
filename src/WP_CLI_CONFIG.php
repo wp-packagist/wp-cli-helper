@@ -49,17 +49,6 @@ class WP_CLI_CONFIG {
 	}
 
 	/**
-	 * Convert array to Yaml
-	 *
-	 * @param $array
-	 * @return string
-	 */
-	public static function array_to_yaml( $array ) {
-		$YAML = new \Spyc();
-		return $YAML->YAMLDump( $array );
-	}
-
-	/**
 	 * Get Global Config Path file
 	 */
 	public function get_global_config_path() {
@@ -157,8 +146,7 @@ class WP_CLI_CONFIG {
 	public function load_config_file() {
 		$config_list = array();
 		if ( $this->exist_config_file() ) {
-			$YAML        = new \Spyc();
-			$config_list = $YAML->YAMLLoad( $this->config_path );
+			$config_list = WP_CLI_FileSystem::load_yaml_file( $this->config_path );
 		}
 
 		return $config_list;
@@ -171,7 +159,7 @@ class WP_CLI_CONFIG {
 	 * @return bool
 	 */
 	public function save_config_file( $array ) {
-		$yaml = self::array_to_yaml( $array );
+		$yaml = WP_CLI_FileSystem::array_to_yaml( $array );
 		if ( WP_CLI_FileSystem::file_put_content( $this->config_path, $yaml ) ) {
 			return true;
 		} else {

@@ -2,13 +2,6 @@
 
 class WP_CLI_FileSystem {
 	/**
-	 * List Of Zip File Mime Type
-	 *
-	 * @var array
-	 */
-	public static $zip_mime_type = array( 'application/zip', 'application/octet-stream', 'application/octet', 'application/x-zip-compressed', 'multipart/x-zip' );
-
-	/**
 	 * Remove Complete Folder
 	 *
 	 * @param $dir
@@ -348,7 +341,6 @@ class WP_CLI_FileSystem {
 	 * Checks if a folder exist
 	 *
 	 * @param $folder
-	 *
 	 * @return bool
 	 */
 	public static function folder_exist( $folder ) {
@@ -510,6 +502,32 @@ class WP_CLI_FileSystem {
 		//Check File Age
 		if ( $now - filemtime( $path ) >= $second ) {
 			return true;
+		}
+
+		return false;
+	}
+
+	/**
+	 * Convert array to Yaml
+	 *
+	 * @param $array
+	 * @return string
+	 */
+	public static function array_to_yaml( $array ) {
+		$YAML = new \Spyc();
+		return $YAML->YAMLDump( $array );
+	}
+
+	/**
+	 * Load Yaml File and Convert to Array
+	 *
+	 * @param $file_path
+	 * @return array|bool
+	 */
+	public static function load_yaml_file( $file_path ) {
+		if ( file_exists( $file_path ) and pathinfo( $file_path, PATHINFO_EXTENSION ) == "yml" ) {
+			$YAML = new \Spyc();
+			return $YAML->YAMLLoad( $file_path );
 		}
 
 		return false;
