@@ -5,8 +5,9 @@ class WP_CLI_Google_Drive {
 	 * List Of Scope for User auth in Google Drive
 	 *
 	 * @var string
+	 * @see https://developers.google.com/identity/protocols/googlescopes
 	 */
-	public static $Scope = "https://www.googleapis.com/auth/drive,profile,email";
+	public static $Scope = "https://www.googleapis.com/auth/drive profile email";
 	/**
 	 * Google Drive API Url
 	 *
@@ -32,6 +33,12 @@ class WP_CLI_Google_Drive {
 	 */
 	public static $redirect_url = "urn:ietf:wg:oauth:2.0:oob";
 	/**
+	 * Get User info Url
+	 *
+	 * @var string
+	 */
+	public static $token_info_url = 'https://www.googleapis.com/oauth2/v3/tokeninfo';
+	/**
 	 * Set Default Request Timeout for connect to Google API
 	 *
 	 * @var int
@@ -49,6 +56,12 @@ class WP_CLI_Google_Drive {
 	 * @var string
 	 */
 	public static $config_name = 'gdrive';
+	/**
+	 * Filed Connecting error to Google API
+	 *
+	 * @var array
+	 */
+	public static $failed_connecting = array( 'error' => true, 'message' => 'Failed connecting to Google API.' );
 
 	/**
 	 * Create Auth Url
@@ -57,7 +70,7 @@ class WP_CLI_Google_Drive {
 	 * @return string
 	 */
 	public static function create_auth_url( $client_ID ) {
-		return "https://accounts.google.com/o/oauth2/auth?client_id=" . $client_ID . "&redirect_uri=" . self::$redirect_url . "&scope=" . self::$Scope . "&response_type=code";
+		return "https://accounts.google.com/o/oauth2/auth?client_id=" . $client_ID . "&redirect_uri=" . self::$redirect_url . "&scope=" . urlencode( self::$Scope ) . "&response_type=code";
 	}
 
 	/**
@@ -83,6 +96,45 @@ class WP_CLI_Google_Drive {
 	}
 
 	/**
+	 * Get WP-CLI Config for Google drive
+	 */
+	public static function get_config() {
+		$wp_cli_config = WP_CLI_CONFIG::get();
+		$gdrive        = $wp_cli_config[ self::$config_name ];
+		if ( ! isset( $gdrive ) || ! is_array( $gdrive ) ) {
+			return false;
+		}
+
+		return $gdrive;
+	}
+
+	/**
+	 * Check Error Response From Google API
+	 *
+	 * @param $request
+	 * @return array
+	 */
+	public static function response( $request ) {
+
+		// Convert Json to array
+		$response = json_decode( $request->body, true );
+
+		// Check Error Response
+		if ( isset( $response['error'] ) || isset( $response['error_description'] ) ) {
+			$data = '';
+			if ( isset( $response['error'] ) ) {
+				$data .= $response['error'] . ', ';
+			}
+			if ( isset( $response['error_description'] ) ) {
+				$data .= $response['error_description'];
+			}
+			return array( 'error' => true, 'message' => $data );
+		}
+
+		return $response;
+	}
+
+	/**
 	 * Get User Token By Code
 	 *
 	 * @see https://developers.google.com/identity/protocols/OAuth2WebServer
@@ -100,7 +152,23 @@ class WP_CLI_Google_Drive {
 		// Request
 		$request = \WP_CLI\Utils\http_request( "POST", $url, $params, self::$json_header_request, array( 'timeout' => self::$request_timeout ) );
 		if ( 200 === $request->status_code ) {
-			return json_decode( $request->body, true );
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Get User information by id Token
+	 *
+	 * @see https://developers.google.com/identity/sign-in/web/backend-auth
+	 * @param $id_token
+	 * @return bool|mixed
+	 */
+	public static function get_user_info_by_id_token( $id_token ) {
+		$request = \WP_CLI\Utils\http_request( "GET", self::$token_info_url, array( 'id_token' => $id_token ), self::$json_header_request, array( 'timeout' => self::$request_timeout ) );
+		if ( 200 === $request->status_code ) {
+			return self::response( $request );
 		}
 
 		return false;
@@ -124,8 +192,7 @@ class WP_CLI_Google_Drive {
 		// Request
 		$request = \WP_CLI\Utils\http_request( "POST", $url, $params, self::$json_header_request, array( 'timeout' => self::$request_timeout ) );
 		if ( 200 === $request->status_code ) {
-			$data = json_decode( $request->body, true );
-			return isset( $data['error'] ) ? false : $data;
+			self::response( $request );
 		}
 
 		return false;
@@ -138,12 +205,9 @@ class WP_CLI_Google_Drive {
 	 */
 	public static function auth() {
 
-		// Check config in WP-CLI
-		$wp_cli_config = WP_CLI_CONFIG::get();
-
 		// Require Parameter
-		$gdrive = $wp_cli_config[ self::$config_name ];
-		if ( ! isset( $gdrive ) ) {
+		$gdrive = self::get_config();
+		if ( $gdrive === false ) {
 			return false;
 		}
 		foreach ( array( 'access_token', 'refresh_token', 'client_id', 'client_secret', 'id_token' ) as $key ) {
@@ -154,15 +218,13 @@ class WP_CLI_Google_Drive {
 
 		// Check Auth in Google
 		$new_token = self::get_token_by_refresh_token( $gdrive['refresh_token'], $gdrive['client_id'], $gdrive['client_secret'] );
-		if ( $new_token === false ) {
+		if ( isset( $new_token['error'] ) ) {
 			return false;
 		} else {
 
-			// Set new Token to WP-CLI config
 			self::save_user_token_in_wp_cli_config( array( 'access_token' => $new_token['access_token'], 'id_token' => $new_token['id_token'] ) );
 			return true;
 		}
 	}
-
 
 }
