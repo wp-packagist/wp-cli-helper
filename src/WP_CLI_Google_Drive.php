@@ -43,7 +43,7 @@ class WP_CLI_Google_Drive {
 	 *
 	 * @var string
 	 */
-	public static $token_info_url = 'https://www.googleapis.com/oauth2/v3/tokeninfo';
+	public static $user_info_url = 'https://www.googleapis.com/oauth2/v1/userinfo';
 	/**
 	 * Set Default Request Timeout for connect to Google API
 	 *
@@ -56,6 +56,12 @@ class WP_CLI_Google_Drive {
 	 * @var array
 	 */
 	public static $json_header_request = array( 'Accept' => 'application/json' );
+	/**
+	 * Json Content type
+	 *
+	 * @var array
+	 */
+	public static $json_content_type = array( 'Content-Type' => 'application/json' );
 	/**
 	 * Header Auth Token
 	 *
@@ -73,13 +79,13 @@ class WP_CLI_Google_Drive {
 	 *
 	 * @var array
 	 */
-	public static $failed_connecting = array( 'error' => true, 'message' => 'Failed connecting to Google API.' );
+	public static $failed_connecting = array( 'error' => true, 'message' => 'Failed connecting to Google API. please try again.' );
 	/**
 	 * Require params for WP-CLI Config
 	 *
 	 * @var array
 	 */
-	public static $require_config_params = array( 'id_token', 'access_token', 'refresh_token', 'client_id', 'client_secret', 'timestamp' );
+	public static $require_config_params = array( 'access_token', 'refresh_token', 'client_id', 'client_secret', 'timestamp' );
 	/**
 	 * Refresh Token Time
 	 *
@@ -92,6 +98,18 @@ class WP_CLI_Google_Drive {
 	 * @var string
 	 */
 	public static $folder_mime_type = "application/vnd.google-apps.folder";
+	/**
+	 * Public Permission ID
+	 *
+	 * @var string
+	 */
+	public static $public_permission_id = 'anyoneWithLink';
+	/**
+	 * Preg filename
+	 *
+	 * @var string
+	 */
+	public static $preg_filename = '/[^a-zA-Z0-9-_. ]/';
 
 	/**
 	 * Create Auth Url
@@ -210,14 +228,14 @@ class WP_CLI_Google_Drive {
 	}
 
 	/**
-	 * Get User information by id Token
+	 * Get User information by Access Token
 	 *
 	 * @see https://developers.google.com/identity/sign-in/web/backend-auth
-	 * @param $id_token
+	 * @param $access_token
 	 * @return bool|mixed
 	 */
-	public static function get_user_info_by_id_token( $id_token ) {
-		$request = \WP_CLI\Utils\http_request( "GET", self::$token_info_url, array( 'id_token' => $id_token ), self::$json_header_request, array( 'timeout' => self::$request_timeout ) );
+	public static function get_user_info_by_access_token( $access_token ) {
+		$request = \WP_CLI\Utils\http_request( "GET", self::$user_info_url, array( 'alt' => 'json', 'access_token' => $access_token ), self::$json_header_request, array( 'timeout' => self::$request_timeout ) );
 		if ( 200 === $request->status_code ) {
 			return self::response( $request );
 		}
@@ -251,9 +269,11 @@ class WP_CLI_Google_Drive {
 	/**
 	 * User Auth
 	 *
-	 * @throws \Exception
+	 * @param bool $run_in_cli
+	 * @return bool
+	 * @throws Exception
 	 */
-	public static function auth() {
+	public static function auth( $run_in_cli = true ) {
 
 		// Require Parameter
 		$gdrive = self::get_config();
@@ -267,12 +287,17 @@ class WP_CLI_Google_Drive {
 		}
 
 		// Check Expire Time For Refresh Token
-		if ( ( $gdrive['timestamp'] + ( self::$refresh_token_time * 60 ) ) <= time() ) {
+		$now = time();
+		if ( ( $gdrive['timestamp'] + ( self::$refresh_token_time * 60 ) ) <= $now ) {
 			$new_token = self::get_token_by_refresh_token( $gdrive['refresh_token'], $gdrive['client_id'], $gdrive['client_secret'] );
 			if ( isset( $new_token['error'] ) ) {
 				return false;
 			} else {
-				self::save_user_token_in_wp_cli_config( array( 'access_token' => $new_token['access_token'], 'id_token' => $new_token['id_token'] ) );
+				self::save_user_token_in_wp_cli_config( array( 'access_token' => $new_token['access_token'], 'timestamp' => time() ) );
+				if ( $run_in_cli ) {
+					# Sleep for await to Change File config
+					sleep( 3 );
+				}
 				return true;
 			}
 		}
@@ -392,11 +417,246 @@ class WP_CLI_Google_Drive {
 		$arg     = WP_CLI_Util::parse_args( $args, $default );
 
 		// Set Params
-		$url = self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ) . "?fields=" . $arg['fields'] . ( $arg['download'] === true ? '&alt=media' : '' );
+		$url = self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ) . "?fields=" . $arg['fields'];
 
 		// Request
 		$request = \WP_CLI\Utils\http_request( "GET", $url, null, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ), array( 'timeout' => self::$request_timeout ) );
 		if ( 200 === $request->status_code ) {
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Remove File By ID.
+	 * For Clear All files in trash you can set fileId = trash.
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_remove( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'fileId'       => '',
+			'trashed'      => false
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		if ( $arg['trashed'] === false ) { # Remove Complete File
+
+			$request = \WP_CLI\Utils\http_request( "DELETE", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ), null, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ), array( 'timeout' => self::$request_timeout ) );
+			/**
+			 * List Status:
+			 *
+			 * 204 -> Remove complete.
+			 * 404 -> file not found.
+			 */
+			if ( $request->status_code === 404 ) {
+				return array( 'error' => true, 'message' => 'Your file or folder not found.' );
+			}
+			if ( in_array( $request->status_code, array( 200, 202, 204, 205 ) ) ) {
+				return self::response( $request );
+			}
+
+		} else {
+
+			// Move File To Trash
+			$request = \WP_CLI\Utils\http_request( "PATCH", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ), json_encode( array( 'trashed' => true ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+			if ( $request->status_code === 200 ) {
+				return self::response( $request );
+			}
+
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Change file Permission by ID
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_permission( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'fileId'       => '',
+			/**
+			 * permission list : public | private
+			 */
+			'permission'   => 'public'
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Private File for anyone
+		if ( $arg['permission'] == "private" ) {
+
+			$request = \WP_CLI\Utils\http_request( "DELETE", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ) . "/permissions/" . self::$public_permission_id, null, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ), array( 'timeout' => self::$request_timeout ) );
+			if ( $request->status_code === 404 ) {
+				return array( 'error' => true, 'message' => 'Your file or folder is not public.' );
+			}
+			if ( in_array( $request->status_code, array( 200, 202, 204, 205 ) ) ) {
+				return self::response( $request );
+			}
+
+			return self::$failed_connecting;
+		} else {
+
+			// Public File for anyone
+			$permission = array(
+				'fileId' => urlencode( $arg['fileId'] ),
+				'role'   => 'reader',
+				'type'   => 'anyone'
+			);
+
+			$request = \WP_CLI\Utils\http_request( "POST", self::$ApiUrl . '/files/' . urlencode( $arg['fileId'] ) . '/permissions', json_encode( $permission ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+			if ( 200 === $request->status_code ) {
+				return self::response( $request );
+			}
+
+			return self::$failed_connecting;
+		}
+
+	}
+
+	/**
+	 * Rename a file or folder by ID
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_rename( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'fileId'       => '',
+			'new_name'     => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		$file_name = preg_replace( self::$preg_filename, '', $arg['new_name'] );
+		$request   = \WP_CLI\Utils\http_request( "PATCH", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ), json_encode( array( 'name' => $file_name ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Copy File To Another Folder by ID
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_copy( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'fileId'       => '',
+			'toId'         => '' // the folder ID that file copy.
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		$request = \WP_CLI\Utils\http_request( "POST", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ) . "/copy", json_encode( array( 'parents' => array( $arg['toId'] ) ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Move a file or folder by ID
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_move( $args = array() ) {
+
+		$default = array(
+			'access_token'  => self::access_token(),
+			'fileId'        => '',
+			'currentParent' => '',
+			'toId'          => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		$request = \WP_CLI\Utils\http_request( "PATCH", self::$ApiUrl . "/files/" . $arg['fileId'] . "?addParents=" . $arg['toId'] . "&removeParents=" . $arg['currentParent'], json_encode( array( "fileId" => urlencode( $arg['fileId'] ), "fields" => "id, parents" ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+
+	/**
+	 * Create Folder in Google Drive
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function create_folder( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'name'         => '',
+			'parentId'     => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Sanitize Folder name
+		$folder_name = preg_replace( self::$preg_filename, '', $arg['name'] );
+
+		// Check Exist Folder name in Parent
+		$list = self::file_list( array( 'q' => "'" . $arg['parentId'] . "' in parents and trashed=false" ) );
+		if ( isset( $list['error'] ) ) {
+			return array( 'error' => false, 'message' => $list['message'] );
+		} else {
+			foreach ( $list as $files ) {
+				if ( $files['name'] == $folder_name ) {
+					return array( 'error' => false, 'message' => "This folder name now exists." );
+				}
+			}
+		}
+
+		// Request Create Folder
+		$request = \WP_CLI\Utils\http_request( "POST", self::$ApiUrl . "/files", json_encode( array( "mimeType" => self::$folder_mime_type, "name" => $folder_name, "parents" => array( $arg['parentId'] ) ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Restore file or folder by ID
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function file_restore( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'fileId'       => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Move File To Trash
+		$request = \WP_CLI\Utils\http_request( "PATCH", self::$ApiUrl . "/files/" . urlencode( $arg['fileId'] ), json_encode( array( 'trashed' => false ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
 			return self::response( $request );
 		}
 
