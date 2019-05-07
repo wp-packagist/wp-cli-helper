@@ -110,6 +110,17 @@ class WP_CLI_Google_Drive {
 	 * @var string
 	 */
 	public static $preg_filename = '/[^a-zA-Z0-9-_. ]/';
+	/**
+	 * MimeType Export Google DOC
+	 * Use 'exportFormat' Request for get file extension.
+	 *
+	 * @var array
+	 */
+	public static $google_doc_mimeType = array(
+		'application/vnd.google-apps.spreadsheet'  => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+		'application/vnd.google-apps.document'     => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+		'application/vnd.google-apps.presentation' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+	);
 
 	/**
 	 * Create Auth Url
@@ -168,11 +179,8 @@ class WP_CLI_Google_Drive {
 	 */
 	public static function access_token() {
 		$auth = self::auth();
-		if ( $auth === true ) {
-			$get_config = self::get_config();
-			if ( isset( $get_config['access_token'] ) ) {
-				return $get_config['access_token'];
-			}
+		if ( $auth['status'] === true ) {
+			return $auth['access_token'];
 		}
 		return false;
 	}
@@ -269,20 +277,19 @@ class WP_CLI_Google_Drive {
 	/**
 	 * User Auth
 	 *
-	 * @param bool $run_in_cli
-	 * @return bool
+	 * @return array
 	 * @throws Exception
 	 */
-	public static function auth( $run_in_cli = true ) {
+	public static function auth() {
 
 		// Require Parameter
 		$gdrive = self::get_config();
 		if ( $gdrive === false ) {
-			return false;
+			return array( 'status' => false, 'message' => 'Google drive config not found.' );
 		}
 		foreach ( self::$require_config_params as $key ) {
 			if ( ! isset( $gdrive[ $key ] ) || ( isset( $gdrive[ $key ] ) and empty( $gdrive[ $key ] ) ) ) {
-				return false;
+				return array( 'status' => false, 'message' => 'Google Drive config parameters not found.' );
 			}
 		}
 
@@ -291,18 +298,14 @@ class WP_CLI_Google_Drive {
 		if ( ( $gdrive['timestamp'] + ( self::$refresh_token_time * 60 ) ) <= $now ) {
 			$new_token = self::get_token_by_refresh_token( $gdrive['refresh_token'], $gdrive['client_id'], $gdrive['client_secret'] );
 			if ( isset( $new_token['error'] ) ) {
-				return false;
+				return array( 'status' => false, 'message' => 'invalid google authorization code.' );
 			} else {
 				self::save_user_token_in_wp_cli_config( array( 'access_token' => $new_token['access_token'], 'timestamp' => time() ) );
-				if ( $run_in_cli ) {
-					# Sleep for await to Change File config
-					sleep( 3 );
-				}
-				return true;
+				return array( 'status' => true, 'access_token' => $new_token['access_token'] );
 			}
 		}
 
-		return true;
+		return array( 'status' => true, 'access_token' => $gdrive['access_token'] );
 	}
 
 	/**
@@ -366,7 +369,7 @@ class WP_CLI_Google_Drive {
 			$_found = false;
 			foreach ( $root_files as $file ) {
 				if ( $file['name'] == $route ) {
-					$route_info = array( 'id' => $file['id'], 'mimeType' => $file['mimeType'], 'name' => $file['name'] );
+					$route_info = $file;
 					$_found     = true;
 					break;
 				}
@@ -661,6 +664,80 @@ class WP_CLI_Google_Drive {
 		}
 
 		return self::$failed_connecting;
+	}
+
+	/**
+	 * Download Original File From Google Drive
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function download( $args = array() ) {
+
+		$default = array(
+			'url'          => '',
+			'access_token' => self::access_token(),
+			'fileId'       => '',
+			'path'         => WP_CLI_Util::getcwd(),
+			'filename'     => '',
+			'mimeType'     => '',
+			'hook'         => false
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Sanitize SaveTo Path
+		$saveTo = WP_CLI_FileSystem::path_join( $arg['path'], $arg['filename'] );
+
+		// Request Option
+		$options = array( 'timeout' => PHP_INT_MAX );
+
+		// Check Hook download
+		if ( $arg['hook'] ) {
+			$hooks = new \Requests_Hooks();
+			$hooks->register( 'request.progress', $arg['hook'] );
+			$options['hooks'] = $hooks;
+		}
+
+		// Download file
+		$request = \WP_CLI\Utils\http_request( 'GET', $arg['url'], null, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ), $options );
+		$body    = json_decode( $request->body, true );
+		if ( $request->status_code === 200 ) {
+			$save_file = WP_CLI_FileSystem::file_put_content( $saveTo, $request->body );
+			if ( isset( $save_file['status'] ) and $save_file['status'] === false ) {
+				return array( 'error' => true, 'message' => $save_file['message'] );
+			} else {
+				return array( 'status' => true );
+			}
+		} elseif ( isset( $body['error']['message'] ) ) {
+			return array( 'error' => true, 'message' => $body['error']['message'] );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Download Original File From Google Drive
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function download_original_file( $args = array() ) {
+		$params = array( 'url' => self::$ApiUrl . "/files/" . urlencode( $args['fileId'] ) . "?alt=media" );
+		return self::download( WP_CLI_Util::parse_args( $args, $params ) );
+	}
+
+	/**
+	 * Export Google Doc File and Download
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function export_file( $args = array() ) {
+		$params = array( 'url' => self::$ApiUrl . "/files/" . urlencode( $args['fileId'] ) . "/export?mimeType=" . $args['mimeType'] );
+		return self::download( WP_CLI_Util::parse_args( $args, $params ) );
 	}
 
 }
