@@ -76,7 +76,6 @@ class WP_CLI_Helper {
 		);
 	}
 
-
 	/**
 	 * Create Table View
 	 *

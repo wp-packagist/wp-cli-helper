@@ -2,23 +2,139 @@
 
 class WP_CLI_FileSystem {
 	/**
-	 * Remove Complete Folder
+	 * Check is Writable file or Folder
+	 *
+	 * @param $path
+	 * @return array
+	 */
+	public static function is_writable( $path ) {
+
+		// Normalize Path
+		$path = self::normalize_path( $path );
+
+		// Check Exist File or Folder
+		if ( ! file_exists( $path ) ) {
+			return array( 'status' => false, 'message' => "The '$path' path not found." );
+		}
+
+		// Check Is Writable File or Folder
+		if ( @is_writable( $path ) ) {
+			return array( 'status' => true, 'normalize-path' => $path, 'info' => pathinfo( $path ), 'type' => ( is_dir( $path ) ? 'dir' : 'file' ), 'size' => ( is_file( $path ) ? filesize( $path ) : 0 ) );
+		}
+
+		// Return Error
+		return array( 'status' => false, 'message' => "Permission denied.The '$path' path not writable." );
+	}
+
+	/**
+	 * Remove File
+	 *
+	 * @param $path
+	 * @return array
+	 */
+	public static function remove_file( $path ) {
+
+		// Check Writable File
+		$is_writable = self::is_writable( $path );
+		if ( $is_writable['status'] === false ) {
+			return $is_writable;
+		}
+
+		// Check File or Folder
+		if ( $is_writable['type'] == "dir" ) {
+			return array( 'status' => false, 'message' => ".The '$path' must be file." );
+		}
+
+		// Remove File
+		if ( @unlink( $is_writable['normalize-path'] ) === true ) {
+			return array( 'status' => true );
+		} else {
+			return array( 'status' => false, 'message' => "The '$path' file could not be deleted." );
+		}
+	}
+
+	/**
+	 * Remove Complete Folder with all files
 	 *
 	 * @param $dir
 	 * @param bool $remove_folder
-	 * @return bool
+	 * @return array
 	 */
 	public static function remove_dir( $dir, $remove_folder = false ) {
-		$di = new \RecursiveDirectoryIterator( $dir, \FilesystemIterator::SKIP_DOTS );
-		$ri = new \RecursiveIteratorIterator( $di, \RecursiveIteratorIterator::CHILD_FIRST );
-		foreach ( $ri as $file ) {
-			$file->isDir() ? rmdir( $file ) : unlink( $file );
-		}
-		if ( $remove_folder ) {
-			@rmdir( $dir );
+
+		// Check Writable File
+		$is_writable = self::is_writable( $dir );
+		if ( $is_writable['status'] === false ) {
+			return $is_writable;
 		}
 
-		return true;
+		// Check File or Folder
+		if ( $is_writable['type'] == "file" ) {
+			return array( 'status' => false, 'message' => ".The '$dir' must be dir." );
+		}
+
+		//rmdir function
+		$rmdir = function ( $path ) {
+			if ( ! @rmdir( $path ) ) {
+				$rmdir_error_array = error_get_last();
+				return array( 'status' => false, 'message' => 'Cannot remove directory. ' . $rmdir_error_array['message'] );
+			}
+
+			return array( 'status' => true );
+		};
+
+		// Get List Of file and Folder this path
+		$di = new \RecursiveDirectoryIterator( $is_writable['normalize-path'], \FilesystemIterator::SKIP_DOTS );
+		$ri = new \RecursiveIteratorIterator( $di, \RecursiveIteratorIterator::CHILD_FIRST );
+		foreach ( $ri as $file ) {
+
+			// Remove Action
+			if ( $file->isDir() ) {
+				$remove = $rmdir( $file );
+			} else {
+				$remove = self::remove_file( $file );
+			}
+
+			// Check Error
+			if ( $remove['status'] === false ) {
+				return $remove;
+			}
+		}
+
+		// Check Removed Folder
+		if ( $remove_folder ) {
+			$rmdir( $dir );
+		}
+
+		return array( 'status' => true );
+	}
+
+	/**
+	 * Create Folder
+	 *
+	 * @param $name
+	 * @param $path
+	 * @param int $permission
+	 * @return array
+	 */
+	public static function create_dir( $name, $path, $permission = 0755 ) {
+
+		// Check Writable Folder
+		$is_writable = self::is_writable( $path );
+		if ( ! $is_writable['status'] ) {
+			return $is_writable;
+		}
+
+		// Prepare Path
+		$dir_path = self::path_join( $is_writable['normalize-path'], $name );
+
+		// Create directory
+		if ( ! @mkdir( $dir_path, $permission, true ) ) {
+			$mkdirErrorArray = error_get_last();
+			return array( 'status' => false, 'message' => 'Cannot create directory. ' . $mkdirErrorArray['message'] );
+		}
+
+		return array( 'status' => true, 'path' => $dir_path );
 	}
 
 	/**
@@ -39,17 +155,6 @@ class WP_CLI_FileSystem {
 		}
 
 		return rename( rtrim( $old_name, "/" ), rtrim( $new_name, "/" ) );
-	}
-
-	/**
-	 * Create Folder
-	 *
-	 * @param $name
-	 * @param $path
-	 * @param int $permission
-	 */
-	public static function create_dir( $name, $path, $permission = 0755 ) {
-		mkdir( rtrim( $path, "/" ) . "/" . $name, $permission, true );
 	}
 
 	/**
@@ -90,20 +195,6 @@ class WP_CLI_FileSystem {
 		}
 
 		return $results;
-	}
-
-	/**
-	 * Remove File
-	 *
-	 * @param $path
-	 * @return bool
-	 */
-	public static function remove_file( $path ) {
-		if ( @unlink( self::normalize_path( $path ) ) === true ) {
-			return true;
-		} else {
-			return false;
-		}
 	}
 
 	/**
@@ -170,6 +261,77 @@ class WP_CLI_FileSystem {
 			$path = ucfirst( $path );
 		}
 		return $path;
+	}
+
+	/**
+	 * Create Zip Archive from single file
+	 *
+	 * @param array $args
+	 * @return array
+	 */
+	public static function zip_archive_file( $args = array() ) {
+
+		// Prepare Default Params
+		$default = array(
+			'new_name' => '',
+			'saveTo'   => '',
+			'filepath' => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Check SaveTo in Current Directory
+		if ( empty( $arg['saveTo'] ) ) {
+			$arg['saveTo'] = WP_CLI_Util::getcwd();
+		}
+
+		// Check Writable
+		$is_writable = self::is_writable( $arg['saveTo'] );
+		if ( ! $is_writable['status'] ) {
+			return $is_writable;
+		}
+
+		// Check Active Zip Extension
+		if ( ! extension_loaded( 'zip' ) ) {
+			return array( 'status' => false, 'message' => 'Please install/enable the Zip PHP extension.' );
+		}
+
+		// Check Exist File
+		if ( ! file_exists( $arg['filepath'] ) ) {
+			return array( 'status' => false, 'message' => 'File path not found.' );
+		}
+
+		// Check Path is file
+		if ( ! is_file( $arg['filepath'] ) ) {
+			return array( 'status' => false, 'message' => 'Path contain a folder.' );
+		}
+
+		// Prepare Save To
+		$file_name = basename( $arg['filepath'] );
+		if ( ! empty( $arg['new_name'] ) ) {
+			$file_name = preg_replace( '/[^a-zA-Z0-9-_. ]/', '', $arg['new_name'] );
+		}
+
+		// Check Zip Extension
+		$saveTo     = WP_CLI_FileSystem::path_join( $arg['saveTo'], $file_name );
+		$saveToInfo = pathinfo( $saveTo );
+		if ( isset( $saveToInfo['extension'] ) and $saveToInfo['extension'] != 'zip' ) {
+			$saveTo = WP_CLI_FileSystem::path_join( $arg['saveTo'], $file_name . '.zip' );
+		}
+
+		// Create Zip Archive
+		$zip = new \ZipArchive();
+		if ( @$zip->open( $saveTo, ZIPARCHIVE::CREATE ) !== true ) {
+			return array( 'status' => false, 'message' => 'ZIP creation failed at this time.' );
+		}
+
+		// Added File To Zip
+		$zip->addFile( $arg['filepath'], basename( $arg['filepath'] ) );
+
+		// Close Zip File
+		$zip->close();
+
+		// Return
+		return array( 'status' => true, 'zip_path' => $saveTo, 'name' => basename( $saveTo ), 'size' => filesize( $saveTo ) );
 	}
 
 	/**
@@ -254,7 +416,6 @@ class WP_CLI_FileSystem {
 	 *
 	 * @param $file_path
 	 * @param bool $path_to_unzip | without zip file name
-	 *
 	 * @example unzip("/wp-content/3.zip", "/wp-content/test/");
 	 * We Don`t Use https://developer.wordpress.org/reference/functions/unzip_file/
 	 * @return bool
@@ -283,7 +444,7 @@ class WP_CLI_FileSystem {
 			$zip->extractTo( $path );
 			$zip->close();
 		} else {
-			WP_CLI_Helper::error( "Zip file is not found." );
+			WP_CLI_Helper::error( "Zip file not found." );
 			return false;
 		}
 
@@ -319,7 +480,7 @@ class WP_CLI_FileSystem {
 	 *
 	 * @param $file_path
 	 * @param $data
-	 * @return bool
+	 * @return array|bool
 	 */
 	public static function file_put_content( $file_path, $data ) {
 		try {
@@ -327,9 +488,15 @@ class WP_CLI_FileSystem {
 			if ( $isInFolder ) {
 				$folderName = $file_path_match[1];
 				if ( ! is_dir( $folderName ) ) {
-					mkdir( $folderName, 0777, true );
+
+					// Create Folder
+					if ( ! @mkdir( $folderName, 0777, true ) ) {
+						$mkdirErrorArray = error_get_last();
+						return array( 'status' => false, 'message' => 'Cannot create directory. ' . $mkdirErrorArray['message'] );
+					}
 				}
 			}
+			// File Put Content
 			file_put_contents( $file_path, $data, LOCK_EX );
 			return true;
 		} catch ( \Exception $e ) {

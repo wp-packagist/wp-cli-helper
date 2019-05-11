@@ -121,6 +121,43 @@ class WP_CLI_Google_Drive {
 		'application/vnd.google-apps.document'     => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 		'application/vnd.google-apps.presentation' => 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 	);
+	/**
+	 * GDrive Cache dir
+	 *
+	 * @var string
+	 */
+	public static $cache_dir = 'gdrive';
+
+	/**
+	 * Get Google Drive Cache dir path in WP-CLI
+	 */
+	public static function get_cache_dir() {
+
+		// Get Full path
+		$path = WP_CLI_Helper::get_cache_dir( self::$cache_dir );
+
+		// Check Exist dir
+		if ( ! realpath( $path ) ) {
+			$make_dir = WP_CLI_FileSystem::create_dir( self::$cache_dir, WP_CLI_Helper::get_cache_dir() );
+			if ( $make_dir['status'] === false ) {
+				return $make_dir;
+			}
+		}
+
+		return array( 'status' => true, 'path' => $path );
+	}
+
+	/**
+	 * Remove All File From Google Drive Cache Folder
+	 */
+	public static function clear_cache() {
+		$path = self::get_cache_dir();
+		if ( $path['status'] ) {
+			return WP_CLI_FileSystem::remove_dir( $path['path'] );
+		}
+
+		return $path;
+	}
 
 	/**
 	 * Create Auth Url
@@ -404,6 +441,91 @@ class WP_CLI_Google_Drive {
 	}
 
 	/**
+	 * Create Folder in Google Drive
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function create_folder( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'name'         => '',
+			'parentId'     => ''
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Sanitize Folder name
+		$folder_name = preg_replace( self::$preg_filename, '', $arg['name'] );
+
+		// Request Create Folder
+		$request = \WP_CLI\Utils\http_request( "POST", self::$ApiUrl . "/files", json_encode( array( "mimeType" => self::$folder_mime_type, "name" => $folder_name, "parents" => array( $arg['parentId'] ) ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			/* @see https://developers.google.com/drive/api/v3/reference/files#resource */
+			return self::response( $request );
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Make folder By Path
+	 *
+	 * @param $path
+	 * @return bool|mixed
+	 * @throws Exception
+	 */
+	public static function make_folder_by_path( $path ) {
+
+		// Sanitize Path and get List
+		$list = array_filter( explode( "/", self::sanitize_path( $path ) ), function ( $value ) {
+			return $value !== '';
+		} );
+
+		// First Get All List File in MY DRIVE
+		$root_files = self::file_list();
+		if ( isset( $root_files['error'] ) ) {
+			return array( 'error' => true, 'message' => $root_files['message'] );
+		}
+
+		// Start Nested Search and Create folder
+		foreach ( $list as $route ) {
+
+			$_found = false;
+			foreach ( $root_files as $file ) {
+				if ( $file['name'] == $route and $file['mimeType'] == self::$folder_mime_type ) {
+					$route_info = $file;
+					$_found     = true;
+					break;
+				}
+			}
+
+			// If Not Found Create Folder
+			if ( $_found === false ) {
+				$route_info = self::create_folder( array( 'name' => $route, 'parentId' => ( reset( $list ) == $route ? 'root' : $route_info['id'] ) ) );
+				if ( isset( $route_info['error'] ) ) {
+					return array( 'error' => true, 'message' => $route_info['message'] );
+				}
+			}
+
+			// Get Folder Detail
+			if ( isset( $route_info ) ) {
+				if ( end( $list ) == $route ) {
+					return $route_info;
+				} else {
+					$root_files = self::file_list( array( 'q' => "'" . $route_info['id'] . "' in parents and trashed=false" ) );
+					if ( isset( $root_files['error'] ) ) {
+						return array( 'error' => true, 'message' => $root_files['message'] );
+					}
+				}
+			}
+		}
+
+		return array( 'error' => true, 'message' => "The '$path' folder was not created on Google Drive." );
+	}
+
+	/**
 	 * Get information about file wit ID
 	 *
 	 * @param array $args
@@ -601,47 +723,6 @@ class WP_CLI_Google_Drive {
 		return self::$failed_connecting;
 	}
 
-
-	/**
-	 * Create Folder in Google Drive
-	 *
-	 * @param array $args
-	 * @return array
-	 * @throws Exception
-	 */
-	public static function create_folder( $args = array() ) {
-
-		$default = array(
-			'access_token' => self::access_token(),
-			'name'         => '',
-			'parentId'     => ''
-		);
-		$arg     = WP_CLI_Util::parse_args( $args, $default );
-
-		// Sanitize Folder name
-		$folder_name = preg_replace( self::$preg_filename, '', $arg['name'] );
-
-		// Check Exist Folder name in Parent
-		$list = self::file_list( array( 'q' => "'" . $arg['parentId'] . "' in parents and trashed=false" ) );
-		if ( isset( $list['error'] ) ) {
-			return array( 'error' => false, 'message' => $list['message'] );
-		} else {
-			foreach ( $list as $files ) {
-				if ( $files['name'] == $folder_name ) {
-					return array( 'error' => false, 'message' => "This folder name now exists." );
-				}
-			}
-		}
-
-		// Request Create Folder
-		$request = \WP_CLI\Utils\http_request( "POST", self::$ApiUrl . "/files", json_encode( array( "mimeType" => self::$folder_mime_type, "name" => $folder_name, "parents" => array( $arg['parentId'] ) ) ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
-		if ( $request->status_code === 200 ) {
-			return self::response( $request );
-		}
-
-		return self::$failed_connecting;
-	}
-
 	/**
 	 * Restore file or folder by ID
 	 *
@@ -738,6 +819,76 @@ class WP_CLI_Google_Drive {
 	public static function export_file( $args = array() ) {
 		$params = array( 'url' => self::$ApiUrl . "/files/" . urlencode( $args['fileId'] ) . "/export?mimeType=" . $args['mimeType'] );
 		return self::download( WP_CLI_Util::parse_args( $args, $params ) );
+	}
+
+	/**
+	 * Upload File to Google Drive
+	 *
+	 * @param array $args
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function upload( $args = array() ) {
+
+		$default = array(
+			'access_token' => self::access_token(),
+			'parentId'     => '',
+			'file_path'    => '',
+			'new_name'     => '',
+			'hook'         => false
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
+
+		// Create New Resume Upload Link
+		$file = array(
+			'name'    => basename( $arg['file_path'] ),
+			'parents' => array( $arg['parentId'] )
+		);
+
+		// Check new name for File
+		if ( ! empty( $arg['new_name'] ) ) {
+			$file['name'] = preg_replace( self::$preg_filename, '', $arg['new_name'] );
+		}
+
+		$request = \WP_CLI\Utils\http_request( "POST", self::$UploadUrl . '/files?uploadType=resumable', json_encode( $file ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( 200 === $request->status_code ) {
+
+			// Get Upload Link
+			$upload_url = '';
+			$per_line   = explode( "\n", $request->raw );
+			foreach ( $per_line as $line ) {
+				if ( substr( strtolower( trim( $line ) ), 0, 8 ) == "location" ) {
+					$upload_url = str_ireplace( "Location: ", "", $line );
+				}
+			}
+
+			// Check Empty Upload Url
+			if ( empty( $upload_url ) ) {
+				return array( 'error' => true, 'message' => "Problem get upload url. please try again." );
+			}
+
+			// Upload File to Google Drive
+			$options = array( 'timeout' => PHP_INT_MAX );
+
+			// Check Hook Upload
+			if ( $arg['hook'] ) {
+				$hooks = new \Requests_Hooks();
+				$hooks->register( 'request.progress', $arg['hook'] );
+				$options['hooks'] = $hooks;
+			}
+
+			// Upload file
+			$request = \WP_CLI\Utils\http_request( 'PUT', trim( $upload_url ), file_get_contents( $arg['file_path'] ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), $options );
+			$body = json_decode( $request->body, true );
+			if ( $request->status_code === 200 ) {
+				return array( 'status' => true );
+			} elseif ( isset( $body['error']['message'] ) ) {
+				return array( 'error' => true, 'message' => $body['error']['message'] );
+			}
+
+		}
+
+		return self::$failed_connecting;
 	}
 
 }
