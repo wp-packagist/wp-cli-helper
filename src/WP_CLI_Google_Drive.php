@@ -879,13 +879,29 @@ class WP_CLI_Google_Drive {
 
 			// Upload file
 			$request = \WP_CLI\Utils\http_request( 'PUT', trim( $upload_url ), file_get_contents( $arg['file_path'] ), array_merge( self::$json_content_type, self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . $arg['access_token'] ) ), $options );
-			$body = json_decode( $request->body, true );
+			$body    = json_decode( $request->body, true );
 			if ( $request->status_code === 200 ) {
 				return array( 'status' => true );
 			} elseif ( isset( $body['error']['message'] ) ) {
 				return array( 'error' => true, 'message' => $body['error']['message'] );
 			}
 
+		}
+
+		return self::$failed_connecting;
+	}
+
+	/**
+	 * Get About Google Drive User
+	 *
+	 * @param bool $access_token
+	 * @return array
+	 * @throws Exception
+	 */
+	public static function about( $access_token = false ) {
+		$request = \WP_CLI\Utils\http_request( "GET", self::$ApiUrl . "/about/?fields=user,storageQuota", null, array_merge( self::$json_header_request, array( 'Authorization' => self::$auth_header . ' ' . ( $access_token === false ? self::access_token() : $access_token ) ) ), array( 'timeout' => self::$request_timeout ) );
+		if ( $request->status_code === 200 ) {
+			return self::response( $request );
 		}
 
 		return self::$failed_connecting;
