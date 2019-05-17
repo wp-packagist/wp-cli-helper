@@ -181,15 +181,34 @@ class WP_CLI_FileSystem {
 	 * @return array
 	 */
 	public static function get_dir_contents( $dir, $sub_folder = false, &$results = array() ) {
+
+		// Check Folder
+		$is_writable = self::is_writable( $dir );
+		if ( ! $is_writable['status'] ) {
+			return $is_writable;
+		}
+
+		// Scan Dir
 		$files = scandir( $dir );
+
+		// Push All files and Folder To Array
 		foreach ( $files as $key => $value ) {
+
+			// Get RealPath
 			$path = realpath( $dir . DIRECTORY_SEPARATOR . $value );
+
+			// if is file push to array
 			if ( ! is_dir( $path ) ) {
 				$results[] = $path;
+
 			} else if ( $value != "." && $value != ".." ) {
+
+				// If Active Sub-folders run again
 				if ( $sub_folder == true ) {
-					self::get_dir_contents( $path, $results );
+					self::get_dir_contents( $path, true, $results );
 				}
+
+				// else push dir path to list
 				$results[] = $path;
 			}
 		}
@@ -337,79 +356,119 @@ class WP_CLI_FileSystem {
 	/**
 	 * Create Zip Archive
 	 *
-	 * @param $source
-	 * @param string $zip_name
-	 * @param bool $base_folder
-	 * @param array $except
-	 * @return bool
-	 * @throws \WP_CLI\ExitException
+	 * @param array $args
+	 * @return array
 	 * @example Filesystem::zipData(ABSPATH.'/wp-admin', "wp-admin.zip", "wp-admin", array("about.php", "css/about.css", "images/"));
 	 */
-	public static function create_zip( $source, $zip_name = 'archive.zip', $base_folder = false, $except = array() ) {
-		if ( extension_loaded( 'zip' ) ) {
+	public static function create_zip( $args = array() ) {
 
-			// Get real path for our folder
-			$rootPath = realpath( $source );
+		// Prepare Default Params
+		$default = array(
+			'source'     => '',
+			'saveTo'     => WP_CLI_Util::getcwd(),
+			'new_name'   => '',
+			'baseFolder' => false,
+			'except'     => array()
+		);
+		$arg     = WP_CLI_Util::parse_args( $args, $default );
 
-			// Initialize archive object
-			$zip = new \ZipArchive();
-			$zip->open( $zip_name, \ZipArchive::CREATE | \ZipArchive::OVERWRITE );
+		// Check Writable
+		$is_writable = self::is_writable( $arg['saveTo'] );
+		if ( ! $is_writable['status'] ) {
+			return $is_writable;
+		}
 
-			// Create recursive directory iterator
-			$files = new \RecursiveIteratorIterator(
-				new \RecursiveDirectoryIterator( $rootPath ),
-				\RecursiveIteratorIterator::LEAVES_ONLY
-			);
+		// Check Active Zip Extension
+		if ( ! extension_loaded( 'zip' ) ) {
+			return array( 'status' => false, 'message' => 'Please install/enable the Zip PHP extension.' );
+		}
 
-			foreach ( $files as $name => $file ) {
-				// Skip directories (they would be added automatically)
-				if ( ! $file->isDir() ) {
-					// Get real and relative path for current file
-					$filePath     = $file->getRealPath();
-					$relativePath = substr( $filePath, strlen( $rootPath ) + 1 );
+		// Check Exist File
+		if ( ! file_exists( $arg['source'] ) ) {
+			return array( 'status' => false, 'message' => 'File path not found.' );
+		}
 
-					//Check except Files Or dir
-					$in_zip = true;
-					if ( count( $except ) > 0 ) {
-						foreach ( $except as $path ) {
-							//Check is file or dir
-							if ( is_file( $path ) ) {
-								if ( in_array( self::normalize_path( $relativePath ), $except ) ) {
-									$in_zip = false;
-								}
-							} else {
-								//Check is dir
-								$strlen = strlen( $path );
-								if ( substr( self::normalize_path( $relativePath ), 0, $strlen ) == $path ) {
-									$in_zip = false;
-								}
+		// Check Path is dir
+		if ( ! is_dir( $arg['source'] ) ) {
+			return array( 'status' => false, 'message' => 'Path contain a file.' );
+		}
+
+		// Get real path for our folder
+		$rootPath = realpath( $arg['source'] );
+
+		// Prepare Save To
+		$file_name = basename( $arg['source'] );
+		if ( ! empty( $arg['new_name'] ) ) {
+			$file_name = preg_replace( '/[^a-zA-Z0-9-_. ]/', '', $arg['new_name'] );
+		}
+
+		// Check Zip Extension
+		$saveTo     = WP_CLI_FileSystem::path_join( $arg['saveTo'], $file_name );
+		$saveToInfo = pathinfo( $saveTo );
+		if ( ( isset( $saveToInfo['extension'] ) and $saveToInfo['extension'] != 'zip' ) || ! isset( $saveToInfo['extension'] ) ) {
+			$saveTo = WP_CLI_FileSystem::path_join( $arg['saveTo'], $file_name . '.zip' );
+		}
+
+		// Initialize archive object
+		$zip = new \ZipArchive();
+		if ( @$zip->open( $saveTo, \ZipArchive::CREATE | \ZipArchive::OVERWRITE ) !== true ) {
+			return array( 'status' => false, 'message' => 'ZIP creation failed at this time.' );
+		}
+
+		// Create recursive directory iterator
+		$files = new \RecursiveIteratorIterator( new \RecursiveDirectoryIterator( $rootPath ), \RecursiveIteratorIterator::LEAVES_ONLY );
+
+		// Push List File To folder
+		foreach ( $files as $name => $file ) {
+
+			// Skip directories (they would be added automatically)
+			if ( ! $file->isDir() ) {
+
+				// Get real and relative path for current file
+				$filePath     = $file->getRealPath();
+				$relativePath = substr( $filePath, strlen( $rootPath ) + 1 );
+
+				//Check except Files Or dir
+				$in_zip = true;
+				if ( count( $arg['except'] ) > 0 ) {
+					foreach ( $arg['except'] as $path ) {
+
+						//Check is file or dir
+						if ( is_file( $path ) ) {
+							if ( in_array( self::normalize_path( $relativePath ), $arg['except'] ) ) {
+								$in_zip = false;
+							}
+						} else {
+
+							//Check is dir
+							$str_len = strlen( $path );
+							if ( substr( self::normalize_path( $relativePath ), 0, $str_len ) == $path ) {
+								$in_zip = false;
 							}
 						}
 					}
+				}
 
-					if ( $in_zip === true ) {
-						//Check if base Folder
-						if ( $base_folder != false ) {
-							$relativePath = $base_folder . "/" . $relativePath;
-						}
+				// Check file Exclude From Zip
+				if ( $in_zip === true ) {
 
-						// Add current file to archive
-						$zip->addFile( $filePath, $relativePath );
+					//Check if base Folder
+					if ( $arg['baseFolder'] != false ) {
+						$relativePath = $arg['baseFolder'] . "/" . $relativePath;
 					}
+
+					// Add current file to archive
+					$zip->addFile( $filePath, $relativePath );
 				}
 			}
-
-			// Zip archive will be created only after closing object
-			$zip->close();
-
-		} else {
-			WP_CLI_Helper::error( "Zip extension Not loaded in your php." );
-			return false;
 		}
 
-		return false;
-	}
+		// Zip archive will be created only after closing object
+		$zip->close();
 
+		// Return
+		return array( 'status' => true, 'zip_path' => $saveTo, 'name' => basename( $saveTo ), 'size' => filesize( $saveTo ) );
+	}
 
 	/**
 	 * Unzip File
