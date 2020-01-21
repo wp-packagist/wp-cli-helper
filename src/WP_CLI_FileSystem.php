@@ -54,13 +54,14 @@ class WP_CLI_FileSystem {
 	}
 
 	/**
-	 * Remove Complete Folder with all files
+	 * Remove Complete Folder with all files.
 	 *
 	 * @param $dir
 	 * @param bool $remove_folder
+	 * @param array $except
 	 * @return array
 	 */
-	public static function remove_dir( $dir, $remove_folder = false ) {
+	public static function remove_dir( $dir, $remove_folder = false, $except = array() ) {
 
 		// Check Writable File
 		$is_writable = self::is_writable( $dir );
@@ -88,16 +89,27 @@ class WP_CLI_FileSystem {
 		$ri = new \RecursiveIteratorIterator( $di, \RecursiveIteratorIterator::CHILD_FIRST );
 		foreach ( $ri as $file ) {
 
-			// Remove Action
-			if ( $file->isDir() ) {
-				$remove = $rmdir( $file );
-			} else {
-				$remove = self::remove_file( $file );
+			// Check file in except
+			$_removed = true;
+			foreach ( $except as $path ) {
+				if ( trim( str_replace( $dir, "", self::normalize_path( $file ) ), "/" ) == trim( $path, "/" ) ) {
+					$_removed = false;
+					break;
+				}
 			}
 
-			// Check Error
-			if ( $remove['status'] === false ) {
-				return $remove;
+			// Remove Action
+			if ( $_removed === true ) {
+				if ( $file->isDir() ) {
+					$remove = $rmdir( $file );
+				} else {
+					$remove = self::remove_file( $file );
+				}
+
+				// Check Error
+				if ( $remove['status'] === false ) {
+					return $remove;
+				}
 			}
 		}
 
@@ -358,17 +370,16 @@ class WP_CLI_FileSystem {
 	 *
 	 * @param array $args
 	 * @return array
-	 * @example Filesystem::zipData(ABSPATH.'/wp-admin', "wp-admin.zip", "wp-admin", array("about.php", "css/about.css", "images/"));
 	 */
 	public static function create_zip( $args = array() ) {
 
 		// Prepare Default Params
 		$default = array(
-			'source'     => '',
+			'source'     => '', //ABSPATH
 			'saveTo'     => WP_CLI_Util::getcwd(),
-			'new_name'   => '',
+			'new_name'   => '', //file.zip
 			'baseFolder' => false,
-			'except'     => array()
+			'except'     => array() //array("about.php", "css/about.css", "images/")
 		);
 		$arg     = WP_CLI_Util::parse_args( $args, $default );
 
@@ -475,10 +486,10 @@ class WP_CLI_FileSystem {
 	 *
 	 * @param $file_path
 	 * @param bool $path_to_unzip | without zip file name
-	 * @example unzip("/wp-content/3.zip", "/wp-content/test/");
-	 * We Don`t Use https://developer.wordpress.org/reference/functions/unzip_file/
 	 * @return bool
 	 * @throws \WP_CLI\ExitException
+	 * @example unzip("/wp-content/3.zip", "/wp-content/test/");
+	 * We Don`t Use https://developer.wordpress.org/reference/functions/unzip_file/
 	 */
 	public static function unzip( $file_path, $path_to_unzip = false ) {
 
