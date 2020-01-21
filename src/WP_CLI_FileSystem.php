@@ -70,7 +70,7 @@ class WP_CLI_FileSystem {
 
 		// Check File or Folder
 		if ( $is_writable['type'] == "file" ) {
-			return array( 'status' => false, 'message' => ".The '$dir' must be dir." );
+			return array( 'status' => false, 'message' => "The '$dir' must be dir." );
 		}
 
 		//rmdir function
