@@ -169,9 +169,9 @@ class WP_CLI_CONFIG
         $yaml = WP_CLI_FileSystem::array_to_yaml($array);
         if (WP_CLI_FileSystem::file_put_content($this->config_path, $yaml)) {
             return true;
-        } else {
-            return false;
         }
+
+        return false;
     }
 
     /**
