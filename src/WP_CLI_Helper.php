@@ -526,7 +526,7 @@ class WP_CLI_Helper
     public static function search_replace_db($old, $new, $table = false)
     {
         # Load Search-Replace Class
-        $SRDB = new WP_CLI_FileSystem();
+        $SRDB = new WP_CLI_SRDB();
 
         # Get List All WordPress Table
         if ( ! $table) {
