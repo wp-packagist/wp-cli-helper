@@ -638,35 +638,42 @@ class WP_CLI_FileSystem
      */
     public static function search_replace_file($file_path, $search = array(), $replace = array(), $is_save = true, $which_line = '')
     {
-        //Check Exist file
-        if (file_exists($file_path) and is_dir($file_path) === false) {
-            $lines    = file($file_path);
-            $new_line = array();
-            $z        = 1;
-            foreach ($lines as $l) {
-                if ($which_line != "") {
-                    if ($z == $which_line) {
-                        $new = str_replace($search, $replace, $l);
-                    } else {
-                        $new = $l;
-                    }
-                } else {
-                    $new = str_replace($search, $replace, $l);
-                }
-
-                $new_line[] = $new;
-                $z++;
-            }
-
-            //Save file
-            if ($is_save) {
-                self::file_put_content($file_path, $new_line);
-            }
-
-            return $new_line;
+        // Check Writable File
+        $_is_writable = self::is_writable($file_path);
+        if ($_is_writable['status'] === false) {
+            return $_is_writable;
         }
 
-        return false;
+        // Check is Dir
+        if (is_dir($file_path)) {
+            return array('status' => false, 'message' => "The '$file_path' path not a file.");
+        }
+
+        // Get Lines Of File
+        $lines    = file($file_path);
+        $new_line = array();
+        $z        = 1;
+        foreach ($lines as $l) {
+            if ($which_line != "") {
+                if ($z == $which_line) {
+                    $new = str_replace($search, $replace, $l);
+                } else {
+                    $new = $l;
+                }
+            } else {
+                $new = str_replace($search, $replace, $l);
+            }
+
+            $new_line[] = $new;
+            $z++;
+        }
+
+        //Save file
+        if ($is_save) {
+            self::file_put_content($file_path, $new_line);
+        }
+
+        return array('status' => true, 'new_line' => $new_line);
     }
 
     /**
