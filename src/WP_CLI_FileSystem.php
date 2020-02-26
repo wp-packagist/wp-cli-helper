@@ -565,7 +565,7 @@ class WP_CLI_FileSystem
                 }
             }
             // File Put Content
-            file_put_contents($file_path, $data, LOCK_EX);
+            file_put_contents($file_path, $data);
             return true;
         } catch (\Exception $e) {
             return false;
