@@ -322,6 +322,17 @@ class WP_CLI_Util
     }
 
     /**
+     * Check variable is boolean
+     *
+     * @param $value
+     * @return mixed | null if failed
+     */
+    public static function is_boolean($value)
+    {
+        return filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+    }
+
+    /**
      * Remove (-master) from Github
      *
      * @param $path
