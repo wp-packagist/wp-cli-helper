@@ -1,5 +1,9 @@
 # Changelog
 
-## [1.0.0] - 2020-02-15
+## v1.0.2
+### Added
+- is_boolean method to PHP Utility
+
+## v1.0.0
 
 - Start Release Package
